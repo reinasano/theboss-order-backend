@@ -2,24 +2,26 @@
 const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order'); // Import Schema
-const fetch = require('node-fetch'); // ต้องแน่ใจว่าได้ติดตั้ง node-fetch หรือใช้ axios
+const axios = require('axios'); // <-- ใช้ Axios แทน node-fetch
 
 // *****************************************************************
-// ตั้งค่า: Google Apps Script Web App URL
+// 1. ตั้งค่า: Google Apps Script Web App URL
 // *****************************************************************
-const GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbxFEAJ5rhQ3XjVpZ9PinwzN0Pae2qSJiIXAbLPUTPJORAp4g65QbxL99m3pNZGBMFWeow/exec'; // <-- แทนที่ด้วย URL จริงของคุณ
+// **แทนที่ URL นี้ด้วย URL ที่คุณ Deploy จาก Google Apps Script**
+const GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbxFEAJ5rhQ3XjVpZ9PinwzN0Pae2qSJiIXAbLPUTPJORAp4g65QbxL99m3pNZGBMFWeow/exec'; 
+
 
 /**
  * ฟังก์ชันสำหรับส่งข้อมูลการสั่งซื้อ (รายรับ) ไปยัง Google Sheet
  * @param {object} orderData - ข้อมูลคำสั่งซื้อที่บันทึกสำเร็จจาก MongoDB
  */
 const logToGoogleSheet = async (orderData) => {
-    // กำหนด category: ในตัวอย่างนี้ ใช้ชื่อสินค้าแรกเป็นเกณฑ์อย่างง่าย
-    // คุณควรปรับ Logic นี้ให้ซับซ้อนขึ้นตามการจำแนก 'เนื้อ'/'ผัก' จริงๆ
+    // Logic การจำแนก Category: ตรวจสอบจากชื่อสินค้าตัวแรก
     const firstItemName = orderData.orderDetails[0].name.toLowerCase();
     
-    // Logic การจำแนก (ตัวอย่างง่ายๆ)
-    const category = firstItemName.includes('เนื้อ') || firstItemName.includes('ไก่') || firstItemName.includes('หมู') ? 'meat' : 'veg'; 
+    // ปรับ Logic นี้ตามชื่อสินค้าจริงในระบบของคุณ
+    const isMeat = firstItemName.includes('เนื้อ') || firstItemName.includes('ไก่') || firstItemName.includes('หมู');
+    const category = isMeat ? 'meat' : 'veg'; 
 
     const transactionData = {
         category: category, 
@@ -30,30 +32,32 @@ const logToGoogleSheet = async (orderData) => {
     };
 
     try {
-        const response = await fetch(GOOGLE_SHEET_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(transactionData)
+        // -----------------------------------------------------------------
+        // **ใช้ AXIOS ในการส่ง POST Request**
+        // -----------------------------------------------------------------
+        const response = await axios.post(GOOGLE_SHEET_URL, transactionData, {
+            headers: { 'Content-Type': 'application/json' }
         });
-
-        const result = await response.json();
+        
+        const result = response.data; // Axios เก็บผลลัพธ์ใน response.data
+        
         if (result.result === 'success') {
-            console.log(`✅ Google Sheet Log Success (${category}):`, transactionData.amount);
+            console.log(`✅ Google Sheet Log Success (${category}): ${transactionData.amount}`);
         } else {
-            console.error('❌ Google Sheet Log Failed:', result.message);
+            console.error('❌ Google Sheet Log Failed (Sheet Error):', result.message);
         }
     } catch (error) {
-        console.error('❌ Error sending data to Google Sheet:', error.message);
+        // ข้อผิดพลาดในการเชื่อมต่อ (เช่น URL ผิด, Server ไม่ตอบสนอง)
+        console.error('❌ Error sending data to Google Sheet (Connection):', error.message);
     }
 };
 
 
 // *****************************************************************
-// 1. GET /api/orders: ดึงรายการคำสั่งซื้อ
+// 2. GET /api/orders: ดึงรายการคำสั่งซื้อ
 // *****************************************************************
 router.get('/', async (req, res) => {
     try {
-        // ... (โค้ด GET เดิม)
         const { date, status } = req.query; 
         const query = {};
 
@@ -83,7 +87,7 @@ router.get('/', async (req, res) => {
 });
 
 // *****************************************************************
-// 2. POST /api/orders: สร้างคำสั่งซื้อใหม่ (พร้อม Log ไป Google Sheet)
+// 3. POST /api/orders: สร้างคำสั่งซื้อใหม่ (พร้อม Log ไป Google Sheet)
 // *****************************************************************
 router.post('/', async (req, res) => {
     try {
@@ -93,7 +97,7 @@ router.post('/', async (req, res) => {
         // ----------------------------------------------------
         // **ส่วนที่เพิ่มใหม่: บันทึกข้อมูลไปยัง Google Sheet**
         // ----------------------------------------------------
-        // ใช้ await เพื่อให้แน่ใจว่าการบันทึกฐานข้อมูลเสร็จก่อน แต่ไม่จำเป็นต้องรอผลลัพธ์
+        // ไม่ต้องรอ await เพื่อให้ Client ได้รับคำตอบเร็วขึ้น (Non-blocking)
         logToGoogleSheet(savedOrder); 
         // ----------------------------------------------------
 
@@ -123,10 +127,9 @@ router.post('/', async (req, res) => {
 });
 
 // *****************************************************************
-// 3. GET /api/orders/:orderId: ตรวจสอบสถานะ (ใช้โดยลูกค้า)
+// 4. GET /api/orders/:orderId: ตรวจสอบสถานะ (ใช้โดยลูกค้า)
 // *****************************************************************
 router.get('/:orderId', async (req, res) => {
-    // ... (โค้ด GET เดิม)
     try {
         const order = await Order.findOne({ orderId: req.params.orderId.toUpperCase() });
 
@@ -150,10 +153,9 @@ router.get('/:orderId', async (req, res) => {
 
 
 // *****************************************************************
-// 4. PUT /api/orders/:orderId: อัปเดตสถานะ (ใช้โดย Admin)
+// 5. PUT /api/orders/:orderId: อัปเดตสถานะ (ใช้โดย Admin)
 // *****************************************************************
 router.put('/:orderId', async (req, res) => {
-    // ... (โค้ด PUT เดิม)
     try {
         const { status } = req.body;
         
@@ -170,11 +172,6 @@ router.put('/:orderId', async (req, res) => {
         if (!updatedOrder) {
             return res.status(404).json({ message: 'Order ID not found for update.' });
         }
-        
-        // ----------------------------------------------------
-        // **คุณสามารถเพิ่ม Log สำหรับ 'รายจ่าย' ที่นี่ได้**
-        // เช่น หากมีการอัปเดตสถานะเป็น 'Cancelled' อาจต้องบันทึกเป็น 'รายจ่ายคืนเงิน'
-        // ----------------------------------------------------
 
         res.status(200).json({
             message: 'Order status updated successfully',
