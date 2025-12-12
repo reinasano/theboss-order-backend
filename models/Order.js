@@ -2,10 +2,9 @@ const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
     // รหัสคำสั่งซื้อแบบสั้น
-    // **การแก้ไข:** ลบ required: true ออก
+    // **การแก้ไข:** ลบ required: true ออกเพื่อให้ Pre-save Hook สร้างค่านี้ได้
     orderId: {
         type: String,
-        // required: true, <--- บรรทัดนี้ถูกนำออกไปแล้ว
         unique: true, // ยังคงตรวจสอบความซ้ำ
         uppercase: true, 
     },
@@ -14,10 +13,10 @@ const orderSchema = new mongoose.Schema({
     customerNote: {
         type: String,
         required: true,
-        trim: true, 
+        trim: true, // ตัดช่องว่างหน้า-หลัง
     },
     pickupTime: {
-        type: String, 
+        type: String, // เก็บเป็น String (HH:MM)
         required: true,
     },
     
@@ -49,10 +48,10 @@ const orderSchema = new mongoose.Schema({
 
 // ***************************************
 // Middleware: สร้างรหัส Order ID สั้นก่อนบันทึก (Pre-save Hook)
+// **แก้ไข:** ลบ 'next' ออกจากอาร์กิวเมนต์เพื่อให้ Hook เป็น Async Function ที่ถูกต้อง
 // ***************************************
-orderSchema.pre('save', async function(next) {
+orderSchema.pre('save', async function() { 
     // เงื่อนไข: ตรวจสอบเฉพาะเมื่อเป็นการสร้างเอกสารใหม่ และ orderId ยังไม่มีค่า
-    // การนำ required: true ออก ทำให้ Hook นี้มีโอกาสทำงาน
     if (this.isNew && !this.orderId) { 
         // สร้างรหัส 8 ตัวอักษร จากตัวเลข/ตัวอักษร A-Z, 0-9 
         const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -72,7 +71,7 @@ orderSchema.pre('save', async function(next) {
         }
         this.orderId = uniqueId;
     }
-    next();
+    // ไม่ต้องมี next() เมื่อใช้ async function
 });
 
 module.exports = mongoose.model('Order', orderSchema);
