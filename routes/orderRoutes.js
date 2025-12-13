@@ -1,60 +1,10 @@
 // routes/orderRoutes.js
 const express = require('express');
 const router = express.Router();
-const Order = require('../models/Order'); // Import Schema
-const axios = require('axios'); // <-- ใช้ Axios แทน node-fetch
+const Order = require('../models/Order'); 
 
 // *****************************************************************
-// 1. ตั้งค่า: Google Apps Script Web App URL
-// *****************************************************************
-// **แทนที่ URL นี้ด้วย URL ที่คุณ Deploy จาก Google Apps Script**
-const GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbxFEAJ5rhQ3XjVpZ9PinwzN0Pae2qSJiIXAbLPUTPJORAp4g65QbxL99m3pNZGBMFWeow/exec'; 
-
-
-/**
- * ฟังก์ชันสำหรับส่งข้อมูลการสั่งซื้อ (รายรับ) ไปยัง Google Sheet
- * @param {object} orderData - ข้อมูลคำสั่งซื้อที่บันทึกสำเร็จจาก MongoDB
- */
-const logToGoogleSheet = async (orderData) => {
-    // Logic การจำแนก Category: ตรวจสอบจากชื่อสินค้าตัวแรก
-    const firstItemName = orderData.orderDetails[0].name.toLowerCase();
-    
-    // ปรับ Logic นี้ตามชื่อสินค้าจริงในระบบของคุณ
-    const isMeat = firstItemName.includes('เนื้อ') || firstItemName.includes('ไก่') || firstItemName.includes('หมู');
-    const category = isMeat ? 'meat' : 'veg'; 
-
-    const transactionData = {
-        category: category, 
-        type: 'รายรับ', // การสั่งซื้อถือเป็นรายรับ
-        description: `ยอดขาย #${orderData.orderId}`,
-        amount: orderData.totalAmount,
-        notes: `ร้าน: ${orderData.customerNote} / เวลารับ: ${orderData.pickupTime}`
-    };
-
-    try {
-        // -----------------------------------------------------------------
-        // **ใช้ AXIOS ในการส่ง POST Request**
-        // -----------------------------------------------------------------
-        const response = await axios.post(GOOGLE_SHEET_URL, transactionData, {
-            headers: { 'Content-Type': 'application/json' }
-        });
-        
-        const result = response.data; // Axios เก็บผลลัพธ์ใน response.data
-        
-        if (result.result === 'success') {
-            console.log(`✅ Google Sheet Log Success (${category}): ${transactionData.amount}`);
-        } else {
-            console.error('❌ Google Sheet Log Failed (Sheet Error):', result.message);
-        }
-    } catch (error) {
-        // ข้อผิดพลาดในการเชื่อมต่อ (เช่น URL ผิด, Server ไม่ตอบสนอง)
-        console.error('❌ Error sending data to Google Sheet (Connection):', error.message);
-    }
-};
-
-
-// *****************************************************************
-// 2. GET /api/orders: ดึงรายการคำสั่งซื้อ
+// 1. GET /api/orders: ดึงรายการคำสั่งซื้อ (Admin)
 // *****************************************************************
 router.get('/', async (req, res) => {
     try {
@@ -87,20 +37,13 @@ router.get('/', async (req, res) => {
 });
 
 // *****************************************************************
-// 3. POST /api/orders: สร้างคำสั่งซื้อใหม่ (พร้อม Log ไป Google Sheet)
+// 2. POST /api/orders: สร้างคำสั่งซื้อใหม่
 // *****************************************************************
 router.post('/', async (req, res) => {
     try {
         const newOrder = new Order(req.body); 
         const savedOrder = await newOrder.save();
-
-        // ----------------------------------------------------
-        // **ส่วนที่เพิ่มใหม่: บันทึกข้อมูลไปยัง Google Sheet**
-        // ----------------------------------------------------
-        // ไม่ต้องรอ await เพื่อให้ Client ได้รับคำตอบเร็วขึ้น (Non-blocking)
-        logToGoogleSheet(savedOrder); 
-        // ----------------------------------------------------
-
+        // ลบส่วน Google Sheet Log ออกไป
 
         res.status(201).json({
             message: 'Order placed successfully',
@@ -127,7 +70,7 @@ router.post('/', async (req, res) => {
 });
 
 // *****************************************************************
-// 4. GET /api/orders/:orderId: ตรวจสอบสถานะ (ใช้โดยลูกค้า)
+// 3. GET /api/orders/:orderId: ตรวจสอบสถานะ (ใช้โดยลูกค้า)
 // *****************************************************************
 router.get('/:orderId', async (req, res) => {
     try {
@@ -153,7 +96,7 @@ router.get('/:orderId', async (req, res) => {
 
 
 // *****************************************************************
-// 5. PUT /api/orders/:orderId: อัปเดตสถานะ (ใช้โดย Admin)
+// 4. PUT /api/orders/:orderId: อัปเดตสถานะ (Admin)
 // *****************************************************************
 router.put('/:orderId', async (req, res) => {
     try {
@@ -183,5 +126,63 @@ router.put('/:orderId', async (req, res) => {
         res.status(400).json({ message: 'Failed to update order status', error: error.message });
     }
 });
+
+
+// *****************************************************************
+// 5. GET /api/orders/summary/weekly: สรุปยอดขายรายสัปดาห์ (Admin Function)
+// *****************************************************************
+router.get('/summary/weekly', async (req, res) => {
+    try {
+        // 1. กำหนดช่วงเวลา (สัปดาห์ปัจจุบัน เริ่มต้นวันจันทร์)
+        const now = new Date();
+        const dayOfWeek = now.getDay(); // 0=อาทิตย์, 1=จันทร์, ..., 6=เสาร์
+        const diff = (dayOfWeek === 0) ? 6 : dayOfWeek - 1; 
+        
+        const startOfWeek = new Date(now.setDate(now.getDate() - diff)); 
+        startOfWeek.setHours(0, 0, 0, 0);
+
+        // 2. ดึงข้อมูลคำสั่งซื้อที่ถือว่าเป็นรายรับในสัปดาห์นี้
+        const orders = await Order.find({
+            status: { $in: ['Completed', 'Processing'] }, 
+            createdAt: { $gte: startOfWeek }
+        });
+
+        // 3. เตรียมโครงสร้างสำหรับสรุปผล
+        const summary = {
+            meat: 0,
+            veg: 0,
+            totalRevenue: 0,
+            startDate: startOfWeek.toISOString().split('T')[0],
+            endDate: new Date().toISOString().split('T')[0],
+        };
+
+        // 4. ประมวลผลและจำแนกยอดขาย
+        for (const order of orders) {
+            let orderMeatTotal = 0;
+            let orderVegTotal = 0;
+
+            for (const item of order.orderDetails) {
+                const itemName = item.name.toLowerCase();
+                const isMeat = itemName.includes('เนื้อ') || itemName.includes('ไก่') || itemName.includes('หมู');
+                
+                if (isMeat) {
+                    orderMeatTotal += item.totalPrice;
+                } else {
+                    orderVegTotal += item.totalPrice;
+                }
+            }
+            
+            summary.meat += orderMeatTotal;
+            summary.veg += orderVegTotal;
+            summary.totalRevenue += order.totalAmount; 
+        }
+
+        res.status(200).json(summary);
+    } catch (error) {
+        console.error('Error calculating weekly summary:', error);
+        res.status(500).json({ message: 'Failed to calculate weekly summary', error: error.message });
+    }
+});
+
 
 module.exports = router;
